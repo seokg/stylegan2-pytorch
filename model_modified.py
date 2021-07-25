@@ -496,6 +496,40 @@ class Generator(nn.Module):
     def get_latent(self, input):
         return self.style(input)
 
+    def make_image(
+        self, 
+        latent, 
+        noise=None,
+        randomize_noise=False):
+
+        if noise is None:
+            #print('noise None')
+            if randomize_noise:
+                noise = [None] * self.num_layers
+                #print('true\n',noise)
+            else:
+                noise = [getattr(self.noises, f"noise_{i}") for i in range(self.num_layers)] 
+                #print('false\n',noise)       
+
+        #print('noise:',noise)
+        out = self.input(latent)
+        out = self.conv1(out, latent[:, 0], noise=noise[0])
+
+        skip = self.to_rgb1(out, latent[:, 1])
+
+        i = 1
+        for conv1, conv2, noise1, noise2, to_rgb in zip(
+            self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_rgbs
+        ):
+            out = conv1(out, latent[:, i], noise=noise1)
+            out = conv2(out, latent[:, i + 1], noise=noise2)
+            skip = to_rgb(out, latent[:, i + 2], skip)
+
+            i += 2
+
+        image = skip
+        return image
+
     def forward(
         self,
         styles,
@@ -505,13 +539,14 @@ class Generator(nn.Module):
         truncation_latent=None,
         input_is_latent=False,
         noise=None,
-        randomize_noise=True,
+        randomize_noise=False,
     ):
+        #print('generator forward')
         if not input_is_latent:
             styles = [self.style(s) for s in styles]
 
         if noise is None:
-            if randomize_noise:
+            if randomize_noise: # false로
                 noise = [None] * self.num_layers
             else:
                 noise = [
@@ -527,9 +562,38 @@ class Generator(nn.Module):
                 )
 
             styles = style_t
-            
-        latent = styles
 
+        #print('before inject')
+        #print('styles\n',styles)
+        #print('styles shape',styles.shape)
+        if len(styles) < 2:
+            #print('not mixing/')
+            inject_index = self.n_latent
+
+            if styles[0].ndim < 3:
+                #print(styles[0].dim)
+                latent = styles[0].unsqueeze(1).repeat(1, inject_index, 1)
+
+            else:
+                latent = styles[0]
+            #print('latent\n',latent)
+
+        else:
+            #print('mixing')
+            if inject_index is None:
+                inject_index = random.randint(1, self.n_latent - 1)
+
+            latent = styles[0].unsqueeze(1).repeat(1, inject_index, 1)
+            latent2 = styles[1].unsqueeze(1).repeat(1, self.n_latent - inject_index, 1)
+
+            latent = torch.cat([latent, latent2], 1)
+
+        #print('latent shape',latent.shape)
+        
+        #return latent, None
+        return latent
+
+        '''
         out = self.input(latent)
         out = self.conv1(out, latent[:, 0], noise=noise[0])
 
@@ -552,6 +616,7 @@ class Generator(nn.Module):
 
         else:
             return image, None
+            '''
 
 
 class ConvLayer(nn.Sequential):
